@@ -93,3 +93,7 @@ relations:
   - kubernetes-master:cni
 - - flannel:cni
   - kubernetes-worker:cni
+- - openstack-integrator
+  - kubernetes-master
+- - openstack-integrator
+  - kubernetes-worker
