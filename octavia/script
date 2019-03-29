@@ -1,0 +1,109 @@
+#!/bin/sh
+
+# Pre-requesites
+juju deploy ./bundle.yaml \
+	--overlay ./overlay-loadbalancer-octavia.yaml
+
+# Configure Octavia-internal client/server certificates
+rm -rf demoCA
+mkdir -p demoCA/newcerts
+touch demoCA/index.txt
+touch demoCA/index.txt.attr
+openssl genrsa -passout pass:foobar -des3 -out issuing_ca_key.pem 2048
+openssl req -x509 -passin pass:foobar -new -nodes -key issuing_ca_key.pem \
+    -config /etc/ssl/openssl.cnf \
+    -subj "/C=US/ST=Somestate/O=Org/CN=www.example.com" \
+    -days 365 \
+    -out issuing_ca.pem
+
+openssl genrsa -passout pass:foobar -des3 -out controller_ca_key.pem 2048
+openssl req -x509 -passin pass:foobar -new -nodes \
+        -key controller_ca_key.pem \
+    -config /etc/ssl/openssl.cnf \
+    -subj "/C=US/ST=Somestate/O=Org/CN=www.example.com" \
+    -days 365 \
+    -out controller_ca.pem
+openssl req \
+    -newkey rsa:2048 -nodes -keyout controller_key.pem \
+    -subj "/C=US/ST=Somestate/O=Org/CN=www.example.com" \
+    -out controller.csr
+openssl ca -passin pass:foobar -config /etc/ssl/openssl.cnf \
+    -cert controller_ca.pem -keyfile controller_ca_key.pem \
+    -create_serial -batch \
+    -in controller.csr -days 365 -out controller_cert.pem
+cat controller_cert.pem controller_key.pem > controller_cert_bundle.pem
+
+juju config octavia lb-mgmt-issuing-cacert="$(base64 controller_ca.pem)" \
+	lb-mgmt-issuing-ca-private-key="$(base64 controller_ca_key.pem)" \
+	lb-mgmt-issuing-ca-key-passphrase=foobar \
+	lb-mgmt-controller-cacert="$(base64 controller_ca.pem)" \
+	lb-mgmt-controller-cert="$(base64 controller_cert_bundle.pem)"
+exit 0
+
+. ./openrcv3_project
+
+set -x
+## # Unseal vault
+## vault operator init -key-shares=5 -key-threshold=3
+## vault operator unseal xXx
+## exit 0
+
+juju run-action --wait octavia/0 configure-resources
+
+
+## OpenStack CRUD
+##
+PROJECT_ID=$(openstack project show --domain admin_domain admin -f value -c id)
+SECGRP_ID=$(openstack security group list --project ${PROJECT_ID} | awk '/default/ {print $2}')
+openstack security group rule create ${SECGRP_ID} \
+	--protocol any --ethertype IPv6 --ingress
+openstack security group rule create ${SECGRP_ID} \
+	--protocol any --ethertype IPv4 --ingress
+openstack flavor create --ram 512 --disk 8 tiny
+openstack flavor create --ram 1024 --disk 10 small
+openstack flavor create --vcpus 2 --ram 2048 --disk 20 medium
+openstack flavor create --vcpus 2 --ram 3584 --disk 20 juju
+openstack flavor create --vcpus 4 --ram 4096 --disk 20 large
+openstack flavor create --vcpus 12 --ram 16384 --disk 40 xlarge
+openstack image create --tag octavia-amphora \
+     --container-format bare --disk-format qcow2 \
+     --file images/amphora-x64-haproxy-bionic.qcow2 \
+     octavia-amphora
+openstack network create --external --provider-network-type flat \
+	--provider-physical-network physnet1 ext_net
+openstack subnet create --network ext_net --no-dhcp \
+	--subnet-range 192.168.122.0/24 --gateway 192.168.122.1 \
+	--allocation-pool start=192.168.122.2,end=192.168.122.254 Internet
+NETWORK_ID=$(openstack network create network -f value -c id)
+openstack subnet create subnet --network network --subnet-range 10.42.0.0/24 
+openstack router create router
+openstack router set --external-gateway ext_net router
+GATEWAY_IP=$(openstack router show router -f value -c external_gateway_info \
+	| awk '/ip_address/ { for (i=1;i<NF;i++) if ($i~"ip_address") print $(i+1)}' \
+	| cut -f2 -d\")
+openstack router add subnet router subnet
+openstack quota set --secgroups 100 ${PROJECT_ID}
+openstack quota set --secgroup-rules 1000 ${PROJECT_ID}
+openstack quota set --cores 100 ${PROJECT_ID}
+openstack quota set --instances 100 ${PROJECT_ID}
+
+sudo ip route add 10.42.0.0/24 via ${GATEWAY_IP}
+
+cat <<EOF > cloud-inception.yaml
+clouds:
+  inception:
+    type: openstack
+    auth-types: [ userpass ]
+    regions:
+      RegionOne:
+        endpoint: $OS_AUTH_URL
+EOF
+
+juju remove-cloud inception
+juju add-cloud inception cloud-inception.yaml
+juju bootstrap --no-gui inception \
+	--config network=${NETWORK_ID} \
+	--config http-proxy=http://10.219.3.124:3128 \
+	--model-default network=${NETWORK_ID} \
+	--model-default use-default-secgroup=true \
+	--model-default http-proxy=http://10.219.3.124:3128
