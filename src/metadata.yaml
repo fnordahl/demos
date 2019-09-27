@@ -1,0 +1,15 @@
+name: skeleton
+summary: Reactive charm skeleton
+maintainer: OpenStack Charmers <openstack-charmers@lists.ubuntu.com>
+description: |
+  Reactive charm skeleton making use of team shared code
+tags:
+  - development
+series:
+  - bionic
+  - disco
+  - eoan
+subordinate: false
+requires:
+  some-ep:
+    interface: juju-info

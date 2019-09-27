@@ -1,0 +1,11 @@
+includes:
+  - layer:leadership
+  - layer:openstack
+options:
+  basic:
+    use_venv: True
+    include_system_packages: False
+repo: https://github.com/openstack/charm-skeleton
+config:
+  deletes:
+    - verbose
