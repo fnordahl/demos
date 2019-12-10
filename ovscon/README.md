@@ -9,6 +9,7 @@ charms as demonstrated at [OVS+OVN'19](https://ovscon.site/)
 Get the code
 ------------
 
+    git clone https://opendev.org/x/charm-interface-ovsdb.git
     git clone https://github.com/openstack-charmers/charm-layer-ovn.git
     git clone https://opendev.org/x/charm-ovn-central.git
     git clone https://opendev.org/x/charm-ovn-chassis.git
